@@ -56,8 +56,8 @@ chain = (
 
 La base es `prompt | model.with_structured_output(Schema)`. Se le agregan dos cosas:
 
-1. **`include_raw=True`**. Sin esto, LangChain devuelve sólo el objeto parseado y se pierde el `AIMessage` original, que trae el **`finish_reason`**. Con el mensaje crudo, `_validar_salida` revisa en orden:
-   1. Si `finish_reason` es `length` (OpenAI/Groq) o `stop_reason` es `max_tokens` (Anthropic), la respuesta se cortó por falta de tokens. Se lanza `RespuestaIncompletaError` **antes** de intentar transformar el objeto.
+1. **`include_raw=True`**. Sin esto, LangChain devuelve sólo el objeto parseado y se pierde el `AIMessage` original, que trae el **`finish_reason`**. Con `include_raw=True`, un error de parseo no corta la cadena: queda guardado en `parsing_error`. Así `_validar_salida` decide con toda la información y revisa en orden:
+   1. Si `finish_reason` es `length` (OpenAI/Groq) o `stop_reason` es `max_tokens` (Anthropic), la respuesta se cortó por falta de tokens. Se lanza `RespuestaIncompletaError` **antes** de aceptar el objeto, aunque el parser haya logrado armar algo con lo que llegó.
    2. Si hubo `parsing_error` (JSON roto o que no valida contra Pydantic), se lanza `SalidaMalFormadaError`.
    3. Si `parsed` es `None` (el modelo respondió en texto libre, sin tool call), también se lanza `SalidaMalFormadaError`.
 2. **`.with_retry()` con un predicado**. Sólo se reintentan los errores de salida inválida. Una API key inválida o un modelo inexistente fallan igual en todos los intentos, así que se cortan en el primero. Los errores HTTP transitorios (429, 5xx) los reintenta el SDK del proveedor con `max_retries`.
@@ -65,6 +65,7 @@ La base es `prompt | model.with_structured_output(Schema)`. Se le agregan dos co
 | Error | ¿Reintenta la cadena? |
 |---|---|
 | Respuesta cortada por tokens (`finish_reason=length` / `max_tokens`) | Sí |
+| OpenAI lanza `LengthFinishReasonError` (respuesta cortada en modo `json_schema`) | Sí |
 | JSON mal formado o que no valida contra el schema | Sí |
 | El modelo no devolvió la estructura (sin tool call) | Sí |
 | Groq rechaza la tool call (`400 tool_use_failed` / `json_validate_failed`) | Sí |
@@ -189,7 +190,7 @@ ERROR   pipeline: Extracción fallida tras 2 intento(s) (reintentos agotados): .
 [truncado] ✖ Error controlado tras 2 intento(s)
 ```
 
-Con Groq, una tool call cortada no llega como `finish_reason=length`: el servidor la valida y la rechaza con `400 tool_use_failed`. Por eso el predicado de reintento reconoce ese código. Con OpenAI y Anthropic la respuesta sí llega con `finish_reason=length` / `stop_reason=max_tokens`, y la detecta `_validar_salida`. Ese camino está cubierto por los tests.
+Con Groq, una tool call cortada no llega como `finish_reason=length`: el servidor la valida y la rechaza con `400 tool_use_failed`. Por eso el predicado de reintento reconoce ese código. Con OpenAI, en modo `json_schema`, el SDK lanza `LengthFinishReasonError`. Con Anthropic, la respuesta llega con `stop_reason=max_tokens` y la detecta `_validar_salida`. Los tres casos se reintentan y están cubiertos por los tests.
 
 **3. API key inválida.** El error `401` no se reintenta: `Extracción fallida tras 1 intento(s) (error no reintentable)`.
 
@@ -199,11 +200,11 @@ Con Groq, una tool call cortada no llega como `finish_reason=length`: el servido
 pytest
 ```
 
-21 tests con un modelo falso, sin consumo de tokens. Cubren:
+22 tests con un modelo falso, sin consumo de tokens. Cubren:
 
 - las restricciones del schema;
 - que el prompt reciba el texto y las instrucciones de formato;
-- la recuperación ante `finish_reason=length`, `stop_reason=max_tokens`, JSON inválido, respuesta sin estructura y `tool_use_failed`;
+- la recuperación ante `finish_reason=length`, `LengthFinishReasonError` de OpenAI, `stop_reason=max_tokens`, JSON inválido, respuesta sin estructura y `tool_use_failed`;
 - que se agoten los reintentos;
 - que no se reintenten los errores definitivos.
 

@@ -122,6 +122,16 @@ async def test_reintenta_tool_use_failed_de_groq():
     assert model.llamadas == 2
 
 
+async def test_reintenta_length_finish_reason_error_de_openai():
+    from openai import LengthFinishReasonError
+    from openai.types.chat import ChatCompletion
+
+    completion = ChatCompletion.model_construct(choices=[], usage=None)
+    p, model = pipeline([LengthFinishReasonError(completion=completion), respuesta()])
+    assert await p.process_text("texto") == VALIDO
+    assert model.llamadas == 2
+
+
 async def test_agota_reintentos_y_lanza_error_controlado():
     p, model = pipeline([respuesta(finish_reason="length")] * 3, max_attempts=3)
     with pytest.raises(ExtraccionFallidaError) as info:

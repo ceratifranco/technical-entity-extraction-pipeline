@@ -62,6 +62,10 @@ def es_reintentable(exc: BaseException) -> bool:
     """
     if isinstance(exc, (SalidaInvalidaError, OutputParserException, ValidationError)):
         return True
+    # Con method="json_schema", el SDK de OpenAI lanza esto si finish_reason == "length",
+    # antes de que la respuesta llegue a _validar_salida.
+    if type(exc).__name__ == "LengthFinishReasonError":
+        return True
     # Groq valida la tool call del lado del servidor y devuelve 400 si el JSON está roto.
     return any(codigo in str(exc) for codigo in CODIGOS_JSON_INVALIDO)
 
