@@ -16,10 +16,8 @@ import asyncio
 import logging
 import time
 
-from pydantic import ValidationError
-
-from chain import ExtraccionFallidaError, ExtractionPipeline
-from config import Settings
+from chain import EntradaVaciaError, ExtraccionFallidaError, ExtractionPipeline
+from config import ConfiguracionInvalidaError, Settings
 
 EJEMPLOS = {
     "arquitectura": (
@@ -56,7 +54,7 @@ async def analizar(pipeline: ExtractionPipeline, nombre: str, texto: str) -> Non
     except ExtraccionFallidaError as exc:
         print(f"\n[{nombre}] ✖ Error controlado tras {exc.intentos} intento(s): {exc}")
         return
-    except ValueError as exc:
+    except EntradaVaciaError as exc:
         print(f"\n[{nombre}] ✖ Entrada inválida: {exc}")
         return
     ms = (time.perf_counter() - start) * 1000
@@ -91,18 +89,17 @@ async def main() -> None:
     overrides = {"max_tokens": 40, "max_attempts": 2} if args.demo_truncado else {}
     try:
         settings = Settings.from_env(provider=args.provider, **overrides)
-    except ValidationError as exc:
-        # Configuración inválida (p.ej. falta la API key): se informa sin traceback.
-        mensajes = "; ".join(e["msg"].removeprefix("Value error, ") for e in exc.errors())
-        raise SystemExit(f"Configuración inválida: {mensajes}. Revisá el archivo .env.") from None
+        pipeline = ExtractionPipeline(settings)
+    except ConfiguracionInvalidaError as exc:
+        # Falta la API key, un valor no es válido o falta el paquete del proveedor: sin traceback.
+        raise SystemExit(f"Configuración inválida: {exc}") from None
 
     if args.demo_truncado:
         header(f"Demo: max_tokens={settings.max_tokens} → respuesta cortada → reintento → error controlado")
-        await analizar(ExtractionPipeline(settings), "truncado", EJEMPLOS["arquitectura"])
+        await analizar(pipeline, "truncado", EJEMPLOS["arquitectura"])
         return
 
-    pipeline = ExtractionPipeline(settings)
-    textos = {"texto": args.texto} if args.texto else EJEMPLOS
+    textos = {"texto": args.texto} if args.texto is not None else EJEMPLOS
 
     if args.concurrente:
         header(f"{len(textos)} textos en paralelo con asyncio.gather")

@@ -6,7 +6,7 @@ import os
 from typing import Literal, Self
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field, SecretStr, model_validator
+from pydantic import BaseModel, Field, SecretStr, ValidationError, model_validator
 
 ProviderName = Literal["groq", "openai", "anthropic"]
 
@@ -25,6 +25,27 @@ ENV_VARS = {
     "max_retries": "LLM_MAX_RETRIES",
     "max_attempts": "PIPELINE_MAX_ATTEMPTS",
 }
+
+
+class ConfiguracionInvalidaError(Exception):
+    """La configuración (`.env`, variables de entorno o proveedor) no permite armar el pipeline."""
+
+
+def describir_errores(exc: ValidationError) -> str:
+    """Un mensaje legible por error, con el nombre de la variable de entorno cuando aplica.
+
+    Usa sólo `loc` y `msg`, nunca `input_value`: así una API key no termina en el mensaje.
+    """
+    partes = []
+    for error in exc.errors():
+        # Los errores del model_validator traen la excepción original: se usa su texto tal cual.
+        original = error.get("ctx", {}).get("error")
+        mensaje = str(original) if isinstance(original, ValueError) else error["msg"]
+        if error["loc"]:
+            campo = str(error["loc"][0])
+            mensaje = f"{ENV_VARS.get(campo, campo)}: {mensaje}"
+        partes.append(mensaje)
+    return "; ".join(partes)
 
 
 class Settings(BaseModel):
@@ -58,13 +79,22 @@ class Settings(BaseModel):
 
     @classmethod
     def from_env(cls, **overrides: object) -> Self:
-        """Carga `.env` y arma la configuración. `overrides` pisa lo que venga del entorno."""
+        """Carga `.env` y arma la configuración. `overrides` pisa lo que venga del entorno.
+
+        Lanza `ConfiguracionInvalidaError` si falta la API key o algún valor no es válido.
+        """
         load_dotenv()
         data: dict[str, object] = {
             field: os.environ[var] for field, var in ENV_VARS.items() if os.environ.get(var)
         }
         data.update({k: v for k, v in overrides.items() if v is not None})
-        return cls.model_validate(data)
+        try:
+            return cls.model_validate(data)
+        except ValidationError as exc:
+            raise ConfiguracionInvalidaError(
+                f"{describir_errores(exc)}. Revisá el archivo .env o las variables de entorno "
+                "(las ya definidas en el entorno tienen prioridad sobre .env)"
+            ) from exc
 
     def credentials(self) -> tuple[str, str]:
         """Devuelve (api_key, modelo) del proveedor seleccionado."""

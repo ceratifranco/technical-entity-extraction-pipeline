@@ -73,6 +73,15 @@ La base es `prompt | model.with_structured_output(Schema)`. Se le agregan dos co
 
 Cuando se agotan los intentos, `process_text()` lanza `ExtraccionFallidaError`. Ese error trae el motivo y la cantidad de intentos.
 
+Otros dos errores se lanzan antes de llamar al modelo:
+
+| Error | Cuándo |
+|---|---|
+| `EntradaVaciaError` (subclase de `ValueError`) | El texto está vacío o sólo tiene espacios |
+| `ConfiguracionInvalidaError` (de `config.py`) | `Settings.from_env()` o `build_model()`: falta la API key, un valor del entorno no es válido o falta el paquete del proveedor. El mensaje nombra la variable (p.ej. `LLM_MAX_TOKENS`) y nunca incluye la API key |
+
+Si se construye `Settings(...)` a mano, en lugar de `Settings.from_env()`, los errores de validación llegan como `pydantic.ValidationError`.
+
 El prompt es un `ChatPromptTemplate` sin f-strings. Recibe `{texto}`, y `{format_instructions}` queda precargado con `.partial()` a partir del schema.
 
 ### `config.py`: reutiliza el Módulo 1

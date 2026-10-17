@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from typing import Any
 
 import pytest
@@ -10,13 +11,16 @@ from langchain_core.prompt_values import ChatPromptValue
 from langchain_core.runnables import RunnableLambda
 from pydantic import ValidationError
 
+import config
 from chain import (
+    EntradaVaciaError,
     ExtraccionFallidaError,
     ExtractionPipeline,
+    build_model,
     build_prompt,
     es_reintentable,
 )
-from config import Settings
+from config import ConfiguracionInvalidaError, Settings
 from schemas import ExtraccionTecnica
 
 VALIDO = ExtraccionTecnica(
@@ -150,7 +154,7 @@ async def test_no_reintenta_errores_definitivos():
 
 async def test_texto_vacio_no_llama_al_modelo():
     p, model = pipeline([respuesta()])
-    with pytest.raises(ValueError):
+    with pytest.raises(EntradaVaciaError):
         await p.process_text("   ")
     assert model.llamadas == 0
 
@@ -163,3 +167,74 @@ def test_clasificacion_de_errores():
 def test_settings_exige_key_del_proveedor():
     with pytest.raises(ValidationError):
         Settings(provider="anthropic", groq_api_key="x")
+
+
+@pytest.fixture
+def entorno_limpio(monkeypatch):
+    """Ignora el .env real y las variables del entorno de quien corre los tests."""
+    monkeypatch.setattr(config, "load_dotenv", lambda: None)
+    for var in config.ENV_VARS.values():
+        monkeypatch.delenv(var, raising=False)
+    return monkeypatch
+
+
+def test_from_env_sin_key_da_error_de_configuracion(entorno_limpio):
+    with pytest.raises(ConfiguracionInvalidaError, match="Falta la API key.*ANTHROPIC_API_KEY"):
+        Settings.from_env(provider="anthropic")
+
+
+def test_from_env_nombra_la_variable_invalida(entorno_limpio):
+    entorno_limpio.setenv("GROQ_API_KEY", "x")
+    entorno_limpio.setenv("LLM_MAX_TOKENS", "abc")
+    with pytest.raises(ConfiguracionInvalidaError, match="LLM_MAX_TOKENS"):
+        Settings.from_env()
+
+
+def test_build_model_sin_paquete_del_proveedor(monkeypatch):
+    monkeypatch.setitem(sys.modules, "langchain_anthropic", None)
+    settings = Settings(provider="anthropic", anthropic_api_key="x")
+    with pytest.raises(ConfiguracionInvalidaError, match="pip install langchain-anthropic"):
+        build_model(settings)
+
+
+def test_error_al_crear_el_modelo_no_expone_la_api_key(monkeypatch):
+    langchain_groq = pytest.importorskip("langchain_groq")
+
+    def falla(**kwargs):
+        # Igual que un ValidationError de pydantic: su str() incluye input_value con la key.
+        Settings.model_validate({"provider": "groq", "groq_api_key": kwargs["api_key"], "max_tokens": -1})
+
+    monkeypatch.setattr(langchain_groq, "ChatGroq", falla)
+    settings = Settings(provider="groq", groq_api_key="gsk_secreto")
+    with pytest.raises(ConfiguracionInvalidaError) as info:
+        build_model(settings)
+    assert "gsk_secreto" not in str(info.value)
+    assert "LLM_MAX_TOKENS" in str(info.value)
+
+
+def test_build_model_import_roto_conserva_la_causa(monkeypatch):
+    import builtins
+
+    importar = builtins.__import__
+
+    def falla(name, *args, **kwargs):
+        if name == "langchain_groq":
+            raise ImportError("cannot import name 'X' from 'langchain_core'", name="langchain_core")
+        return importar(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", falla)
+    settings = Settings(provider="groq", groq_api_key="x")
+    with pytest.raises(ConfiguracionInvalidaError, match="No se pudo cargar el proveedor 'groq': cannot import"):
+        build_model(settings)
+
+
+def test_build_model_sin_sdk_muestra_el_error_original(monkeypatch):
+    langchain_groq = pytest.importorskip("langchain_groq")
+
+    def falla(**kwargs):
+        raise ImportError("Could not import groq python package. Please install it with `pip install groq`.")
+
+    monkeypatch.setattr(langchain_groq, "ChatGroq", falla)
+    settings = Settings(provider="groq", groq_api_key="x")
+    with pytest.raises(ConfiguracionInvalidaError, match="pip install groq"):
+        build_model(settings)

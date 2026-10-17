@@ -18,7 +18,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable, RunnableLambda
 from pydantic import ValidationError
 
-from config import Settings
+from config import ConfiguracionInvalidaError, Settings, describir_errores
 from schemas import ExtraccionTecnica
 
 logger = logging.getLogger("pipeline")
@@ -43,6 +43,10 @@ class RespuestaIncompletaError(SalidaInvalidaError):
 
 class SalidaMalFormadaError(SalidaInvalidaError):
     """JSON mal formado, campos faltantes o valores que no pasan la validación Pydantic."""
+
+
+class EntradaVaciaError(ValueError):
+    """El texto a analizar está vacío o sólo tiene espacios: no se llama al modelo."""
 
 
 class ExtraccionFallidaError(Exception):
@@ -91,20 +95,38 @@ def build_model(settings: Settings) -> BaseChatModel:
         "timeout": settings.timeout_s,
         "max_retries": settings.max_retries,
     }
-    match settings.provider:
-        case "groq":
-            from langchain_groq import ChatGroq
+    try:
+        match settings.provider:
+            case "groq":
+                from langchain_groq import ChatGroq
 
-            return ChatGroq(**common, temperature=settings.temperature)
-        case "openai":
-            from langchain_openai import ChatOpenAI
+                return ChatGroq(**common, temperature=settings.temperature)
+            case "openai":
+                from langchain_openai import ChatOpenAI
 
-            return ChatOpenAI(**common, temperature=settings.temperature)
-        case "anthropic":
-            from langchain_anthropic import ChatAnthropic
+                return ChatOpenAI(**common, temperature=settings.temperature)
+            case "anthropic":
+                from langchain_anthropic import ChatAnthropic
 
-            # Igual que en el Módulo 1: no se envía temperature a Anthropic.
-            return ChatAnthropic(**common)
+                # Igual que en el Módulo 1: no se envía temperature a Anthropic.
+                return ChatAnthropic(**common)
+    except ImportError as exc:
+        modulo = f"langchain_{settings.provider}"
+        if isinstance(exc, ModuleNotFoundError) and exc.name == modulo:
+            raise ConfiguracionInvalidaError(
+                f"Falta el paquete del proveedor '{settings.provider}': "
+                f"pip install {modulo.replace('_', '-')}"
+            ) from exc
+        # El paquete está, pero falla al cargarse: falta su SDK, versiones incompatibles, etc.
+        # Se muestra el error original, que ya suele decir qué instalar.
+        raise ConfiguracionInvalidaError(
+            f"No se pudo cargar el proveedor '{settings.provider}': {exc}"
+        ) from exc
+    except ValidationError as exc:
+        # describir_errores y no str(exc): str(exc) incluye input_value, con la API key.
+        raise ConfiguracionInvalidaError(
+            f"No se pudo crear el modelo de '{settings.provider}': {describir_errores(exc)}"
+        ) from exc
 
 
 # --------------------------------------------------------------------------- prompt
@@ -246,10 +268,11 @@ class ExtractionPipeline:
     async def process_text(self, text: str) -> ExtraccionTecnica:
         """Extrae entidades técnicas de `text` y devuelve el objeto ya validado.
 
-        Lanza `ExtraccionFallidaError` si se agotan los reintentos o el error no es reintentable.
+        Lanza `EntradaVaciaError` si el texto está vacío y `ExtraccionFallidaError` si se
+        agotan los reintentos o el error no es reintentable.
         """
         if not text or not text.strip():
-            raise ValueError("El texto de entrada está vacío")
+            raise EntradaVaciaError("El texto de entrada está vacío")
 
         contador = [0]
         token = _intentos.set(contador)
