@@ -78,9 +78,9 @@ Otros dos errores se lanzan antes de llamar al modelo:
 | Error | Cuándo |
 |---|---|
 | `EntradaVaciaError` (subclase de `ValueError`) | El texto está vacío o sólo tiene espacios |
-| `ConfiguracionInvalidaError` (de `config.py`) | `Settings.from_env()` o `build_model()`: falta la API key, un valor del entorno no es válido o falta el paquete del proveedor. El mensaje nombra la variable (p.ej. `LLM_MAX_TOKENS`) y nunca incluye la API key |
+| `ConfiguracionInvalidaError` (de `config.py`, subclase de `ValueError`) | `Settings.from_env()` o `build_model()`: falta la API key, un valor del entorno no es válido o falta el paquete del proveedor. Si el error viene de `Settings`, el mensaje nombra la variable (p.ej. `LLM_MAX_TOKENS`). Ni el mensaje ni el traceback incluyen la API key |
 
-Si se construye `Settings(...)` a mano, en lugar de `Settings.from_env()`, los errores de validación llegan como `pydantic.ValidationError`.
+Si se construye `Settings(...)` a mano, en lugar de `Settings.from_env()`, los errores de validación llegan como `pydantic.ValidationError` (también sin las API keys: `Settings` usa `hide_input_in_errors=True`).
 
 El prompt es un `ChatPromptTemplate` sin f-strings. Recibe `{texto}`, y `{format_instructions}` queda precargado con `.partial()` a partir del schema.
 

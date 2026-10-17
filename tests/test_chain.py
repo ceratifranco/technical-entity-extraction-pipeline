@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import traceback
 from typing import Any
 
 import pytest
@@ -197,19 +198,24 @@ def test_build_model_sin_paquete_del_proveedor(monkeypatch):
         build_model(settings)
 
 
-def test_error_al_crear_el_modelo_no_expone_la_api_key(monkeypatch):
-    langchain_groq = pytest.importorskip("langchain_groq")
-
-    def falla(**kwargs):
-        # Igual que un ValidationError de pydantic: su str() incluye input_value con la key.
-        Settings.model_validate({"provider": "groq", "groq_api_key": kwargs["api_key"], "max_tokens": -1})
-
-    monkeypatch.setattr(langchain_groq, "ChatGroq", falla)
-    settings = Settings(provider="groq", groq_api_key="gsk_secreto")
+def test_error_al_crear_el_modelo_no_expone_la_api_key():
+    pytest.importorskip("langchain_groq")
+    # model_construct saltea la validación de Settings: el error lo lanza el ChatGroq real.
+    valores = Settings(provider="groq", groq_api_key="gsk_secreto").model_dump()
+    settings = Settings.model_construct(**{**valores, "max_tokens": "abc"})
     with pytest.raises(ConfiguracionInvalidaError) as info:
         build_model(settings)
-    assert "gsk_secreto" not in str(info.value)
-    assert "LLM_MAX_TOKENS" in str(info.value)
+    assert "max_tokens" in str(info.value)
+    assert "gsk_secreto" not in "".join(traceback.format_exception(info.value))
+
+
+def test_error_de_configuracion_no_expone_keys_en_el_traceback(entorno_limpio):
+    entorno_limpio.setenv("GROQ_API_KEY", "gsk_secreto")
+    with pytest.raises(ConfiguracionInvalidaError) as info:
+        Settings.from_env(provider="anthropic")
+    assert isinstance(info.value.__cause__, ValidationError)
+    # pydantic recorta input_value, así que de una key puede quedar sólo el principio: "gsk_sec...".
+    assert "gsk_" not in "".join(traceback.format_exception(info.value))
 
 
 def test_build_model_import_roto_conserva_la_causa(monkeypatch):
@@ -224,8 +230,11 @@ def test_build_model_import_roto_conserva_la_causa(monkeypatch):
 
     monkeypatch.setattr(builtins, "__import__", falla)
     settings = Settings(provider="groq", groq_api_key="x")
-    with pytest.raises(ConfiguracionInvalidaError, match="No se pudo cargar el proveedor 'groq': cannot import"):
+    with pytest.raises(
+        ConfiguracionInvalidaError, match="No se pudo cargar el proveedor 'groq': cannot import"
+    ) as info:
         build_model(settings)
+    assert isinstance(info.value.__cause__, ImportError)
 
 
 def test_build_model_sin_sdk_muestra_el_error_original(monkeypatch):

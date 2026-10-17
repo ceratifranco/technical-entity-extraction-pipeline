@@ -123,10 +123,13 @@ def build_model(settings: Settings) -> BaseChatModel:
             f"No se pudo cargar el proveedor '{settings.provider}': {exc}"
         ) from exc
     except ValidationError as exc:
-        # describir_errores y no str(exc): str(exc) incluye input_value, con la API key.
+        # Casi inalcanzable: Settings ya valida estos valores. Queda por si falla un validador
+        # a nivel de modelo de LangChain: ahí input_value es el dict entero, con la API key,
+        # así que no va ni en el mensaje ni como __cause__. Los campos son los del chat model,
+        # no los de Settings: no se traducen a variables de entorno.
         raise ConfiguracionInvalidaError(
-            f"No se pudo crear el modelo de '{settings.provider}': {describir_errores(exc)}"
-        ) from exc
+            f"No se pudo crear el modelo de '{settings.provider}': {describir_errores(exc, {})}"
+        ) from None
 
 
 # --------------------------------------------------------------------------- prompt

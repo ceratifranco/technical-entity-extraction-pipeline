@@ -6,7 +6,7 @@ import os
 from typing import Literal, Self
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field, SecretStr, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, model_validator
 
 ProviderName = Literal["groq", "openai", "anthropic"]
 
@@ -27,14 +27,18 @@ ENV_VARS = {
 }
 
 
-class ConfiguracionInvalidaError(Exception):
-    """La configuración (`.env`, variables de entorno o proveedor) no permite armar el pipeline."""
+class ConfiguracionInvalidaError(ValueError):
+    """La configuración (`.env`, variables de entorno o proveedor) no permite armar el pipeline.
+
+    Hereda de `ValueError`, como el `ValidationError` de pydantic que reemplaza en `from_env`.
+    """
 
 
-def describir_errores(exc: ValidationError) -> str:
+def describir_errores(exc: ValidationError, env_vars: dict[str, str] = ENV_VARS) -> str:
     """Un mensaje legible por error, con el nombre de la variable de entorno cuando aplica.
 
     Usa sólo `loc` y `msg`, nunca `input_value`: así una API key no termina en el mensaje.
+    `env_vars` traduce campo → variable; con `{}` se muestra el nombre del campo tal cual.
     """
     partes = []
     for error in exc.errors():
@@ -42,13 +46,19 @@ def describir_errores(exc: ValidationError) -> str:
         original = error.get("ctx", {}).get("error")
         mensaje = str(original) if isinstance(original, ValueError) else error["msg"]
         if error["loc"]:
-            campo = str(error["loc"][0])
-            mensaje = f"{ENV_VARS.get(campo, campo)}: {mensaje}"
+            # Ruta completa (p.ej. model_kwargs.x); sólo el primer tramo es un campo de Settings.
+            primero, *resto = (str(parte) for parte in error["loc"])
+            ruta = ".".join([env_vars.get(primero, primero), *resto])
+            mensaje = f"{ruta}: {mensaje}"
         partes.append(mensaje)
     return "; ".join(partes)
 
 
 class Settings(BaseModel):
+    # Sin esto, str(ValidationError) incluye input_value con todas las API keys, y aparece
+    # en cualquier traceback (también como __cause__ de ConfiguracionInvalidaError).
+    model_config = ConfigDict(hide_input_in_errors=True)
+
     provider: ProviderName = "groq"
 
     groq_api_key: SecretStr | None = None
