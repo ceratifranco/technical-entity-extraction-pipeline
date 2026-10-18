@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 import traceback
 from typing import Any
 
 import pytest
+from langchain_core.exceptions import OutputParserException
 from langchain_core.messages import AIMessage
 from langchain_core.prompt_values import ChatPromptValue
 from langchain_core.runnables import RunnableLambda
@@ -137,6 +139,17 @@ async def test_reintenta_length_finish_reason_error_de_openai():
     assert model.llamadas == 2
 
 
+async def test_reintenta_output_parser_exception_lanzada_por_el_modelo():
+    p, model = pipeline([OutputParserException("JSON inválido"), respuesta()])
+    assert await p.process_text("texto") == VALIDO
+    assert model.llamadas == 2
+
+
+async def test_acepta_parsed_como_dict_y_lo_valida():
+    p, _ = pipeline([respuesta(parsed=VALIDO.model_dump(mode="json"))])
+    assert await p.process_text("texto") == VALIDO
+
+
 async def test_agota_reintentos_y_lanza_error_controlado():
     p, model = pipeline([respuesta(finish_reason="length")] * 3, max_attempts=3)
     with pytest.raises(ExtraccionFallidaError) as info:
@@ -151,6 +164,33 @@ async def test_no_reintenta_errores_definitivos():
         await p.process_text("texto")
     assert info.value.intentos == 1
     assert model.llamadas == 1
+    assert isinstance(info.value.__cause__, PermissionError)
+
+
+async def test_llamadas_concurrentes_llevan_cuentas_separadas():
+    """Cada texto tiene su cola de respuestas; el sleep fuerza a que los intentos se intercalen."""
+    colas = {
+        "AAA": [respuesta(finish_reason="length"), respuesta()],
+        "BBB": [respuesta()],
+        "CCC": [respuesta(finish_reason="length")] * 3,
+    }
+
+    class ModeloPorTexto:
+        def with_structured_output(self, schema, include_raw=False):
+            async def responder(prompt_value: ChatPromptValue):
+                texto = prompt_value.to_messages()[1].content
+                await asyncio.sleep(0.01)
+                return colas[next(k for k in colas if k in texto)].pop(0)
+
+            return RunnableLambda(responder)
+
+    settings = Settings(provider="groq", groq_api_key="test", max_attempts=3)
+    p = ExtractionPipeline(settings, model=ModeloPorTexto())  # type: ignore[arg-type]
+    a, b, c = await asyncio.gather(
+        p.process_text("AAA"), p.process_text("BBB"), p.process_text("CCC"), return_exceptions=True
+    )
+    assert a == VALIDO and b == VALIDO
+    assert isinstance(c, ExtraccionFallidaError) and c.intentos == 3
 
 
 async def test_texto_vacio_no_llama_al_modelo():

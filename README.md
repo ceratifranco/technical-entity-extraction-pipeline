@@ -51,8 +51,15 @@ chain = (
     | RunnableLambda(_registrar_intento)                              # log del número de intento
     | model.with_structured_output(ExtraccionTecnica, include_raw=True)
     | RunnableLambda(_validar_salida)                                 # finish_reason + parsing + Pydantic
-).with_retry(retry_if_exception_type=_debe_reintentar, stop_after_attempt=3)
+).with_retry(
+    retry_if_exception_type=_debe_reintentar,
+    stop_after_attempt=settings.max_attempts,                        # PIPELINE_MAX_ATTEMPTS, 3 por defecto
+    wait_exponential_jitter=True,                                     # backoff exponencial con jitter, tope 4 s
+    exponential_jitter_params={"max": 4.0},
+)
 ```
+
+`retry_if_exception_type` recibe un predicado, cosa que `with_retry` acepta recién desde langchain-core 1.6.9: por eso ese es el piso en `requirements.txt`.
 
 La base es `prompt | model.with_structured_output(Schema)`. Se le agregan dos cosas:
 
@@ -209,13 +216,15 @@ Con Groq, una tool call cortada no llega como `finish_reason=length`: el servido
 pytest
 ```
 
-29 tests con un modelo falso, sin consumo de tokens. Cubren:
+32 tests con un modelo falso, sin consumo de tokens. Cubren:
 
 - las restricciones del schema;
 - que el prompt reciba el texto y las instrucciones de formato;
-- la recuperación ante `finish_reason=length`, `LengthFinishReasonError` de OpenAI, `stop_reason=max_tokens`, JSON inválido, respuesta sin estructura y `tool_use_failed`;
+- la recuperación ante `finish_reason=length`, `LengthFinishReasonError` de OpenAI, `stop_reason=max_tokens`, JSON inválido, respuesta sin estructura, `OutputParserException` y `tool_use_failed`;
+- que se acepte `parsed` como dict (se revalida contra el schema);
 - que se agoten los reintentos;
-- que no se reintenten los errores definitivos;
+- que no se reintenten los errores definitivos y que `ExtraccionFallidaError` conserve la causa original;
+- que llamadas concurrentes lleven cuentas de intentos separadas;
 - que un texto vacío no llame al modelo;
 - los errores de configuración: API key faltante, variable con valor inválido, paquete del proveedor faltante o que falla al importarse;
 - que ninguna API key aparezca en los mensajes de error ni en los tracebacks.
