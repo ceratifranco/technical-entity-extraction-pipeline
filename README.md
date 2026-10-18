@@ -209,13 +209,16 @@ Con Groq, una tool call cortada no llega como `finish_reason=length`: el servido
 pytest
 ```
 
-22 tests con un modelo falso, sin consumo de tokens. Cubren:
+29 tests con un modelo falso, sin consumo de tokens. Cubren:
 
 - las restricciones del schema;
 - que el prompt reciba el texto y las instrucciones de formato;
 - la recuperación ante `finish_reason=length`, `LengthFinishReasonError` de OpenAI, `stop_reason=max_tokens`, JSON inválido, respuesta sin estructura y `tool_use_failed`;
 - que se agoten los reintentos;
-- que no se reintenten los errores definitivos.
+- que no se reintenten los errores definitivos;
+- que un texto vacío no llame al modelo;
+- los errores de configuración: API key faltante, variable con valor inválido, paquete del proveedor faltante o que falla al importarse;
+- que ninguna API key aparezca en los mensajes de error ni en los tracebacks.
 
 ## Estructura
 
